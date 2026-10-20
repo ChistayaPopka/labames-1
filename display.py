@@ -16,17 +16,30 @@ import math
 import os
 import queue
 import socket
+import sys
 import threading
 import tkinter as tk
 
 PORT = 5005
-IMAGES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+# в собранном exe папка images ищется рядом с exe, а не рядом с .py
+APP_DIR = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
+IMAGES_DIR = os.path.join(APP_DIR, "images")
+ICON_FILE = os.path.join(getattr(sys, "_MEIPASS", APP_DIR), "icons", "display.ico")
 
 try:
     from PIL import Image, ImageTk
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+# цвета интерфейса
+BG = "#111318"
+BAR = "#1f2430"
+PILL = "#2a3040"
+DOT = "#64748b"
+TEXT = "#f1f5f9"
+MUTED = "#94a3b8"
+FONT = "Segoe UI"
 
 EXTENSIONS = (".png", ".gif", ".jpg", ".jpeg", ".bmp", ".webp") if HAS_PIL else (".png", ".gif")
 
@@ -53,6 +66,13 @@ def get_local_ip():
         s.close()
 
 
+def rounded_rect(canvas, x1, y1, x2, y2, r, **kw):
+    """Прямоугольник со скруглёнными углами (в tkinter такого нет из коробки)."""
+    pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+           x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+    return canvas.create_polygon(pts, smooth=True, **kw)
+
+
 def run_server(events):
     """Фоновый поток: принимает подключения от кнопки и кладёт команды в очередь."""
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -71,8 +91,8 @@ def run_server(events):
                 reply = queue.Queue()
                 events.put((command, reply))
                 try:
-                    number = reply.get(timeout=3)
-                    conn.sendall(f"OK {number}\n".encode())
+                    position = reply.get(timeout=3)
+                    conn.sendall(f"OK {position}\n".encode())
                 except (queue.Empty, OSError):
                     pass
             elif command == "PING":
@@ -95,18 +115,27 @@ class DisplayApp:
 
         root.title("Картинка")
         root.geometry("900x650")
-        root.configure(bg="black")
-        root.bind("<F11>", lambda e: root.attributes("-fullscreen", not root.attributes("-fullscreen")))
-        root.bind("<Escape>", lambda e: root.attributes("-fullscreen", False))
+        root.minsize(480, 360)
+        root.configure(bg=BG)
+        try:
+            root.iconbitmap(ICON_FILE)
+        except tk.TclError:
+            pass
+        root.bind("<F11>", lambda e: self.set_fullscreen(not root.attributes("-fullscreen")))
+        root.bind("<Escape>", lambda e: self.set_fullscreen(False))
+        root.bind("<Double-Button-1>", lambda e: self.set_fullscreen(not root.attributes("-fullscreen")))
 
-        self.canvas = tk.Canvas(root, bg="black", highlightthickness=0)
+        self.canvas = tk.Canvas(root, bg=BG, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.status = tk.Label(
-            root,
-            text=f"IP этого ноутбука: {get_local_ip()}   порт: {PORT}",
-            bg="#222", fg="white", font=("Segoe UI", 11), pady=4,
-        )
-        self.status.pack(fill="x")
+
+        # нижняя панель: IP для ноутбука с кнопкой и подсказка
+        self.bar = tk.Frame(root, bg=BAR, padx=18, pady=10)
+        self.bar.pack(fill="x")
+        tk.Label(self.bar, text="IP для кнопки:", bg=BAR, fg=MUTED, font=(FONT, 11)).pack(side="left")
+        tk.Label(self.bar, text=get_local_ip(), bg=BAR, fg=TEXT,
+                 font=(FONT, 16, "bold")).pack(side="left", padx=(8, 0))
+        tk.Label(self.bar, text="F11 или двойной клик — полный экран", bg=BAR, fg=MUTED,
+                 font=(FONT, 10)).pack(side="right")
 
         self.canvas.bind("<Configure>", lambda e: self.show())
         threading.Thread(target=run_server, args=(self.events,), daemon=True).start()
@@ -119,8 +148,16 @@ class DisplayApp:
             step = 1 if command == "NEXT" else -1
             self.index = (self.index + step) % self.count
             self.show()
-            reply.put(self.index + 1)
+            reply.put(f"{self.index + 1}/{self.count}")
         self.root.after(50, self.poll)
+
+    def set_fullscreen(self, value):
+        """В полноэкранном режиме прячем панель, чтобы была видна только картинка."""
+        self.root.attributes("-fullscreen", value)
+        if value:
+            self.bar.pack_forget()
+        else:
+            self.bar.pack(fill="x")
 
     def show(self):
         c = self.canvas
@@ -130,8 +167,30 @@ class DisplayApp:
             self.show_file(self.files[self.index], w, h)
         else:
             self.draw_builtin(BUILTIN[self.index], w, h)
-        c.create_text(w - 10, 10, anchor="ne", text=f"{self.index + 1} / {self.count}",
-                      fill="white", font=("Segoe UI", 14, "bold"))
+        self.draw_counter(w)
+        self.draw_dots(w, h)
+
+    def draw_counter(self, w):
+        """Номер картинки в тёмной «таблетке» в правом верхнем углу."""
+        text = f"{self.index + 1} / {self.count}"
+        pw, ph = 24 + len(text) * 11, 36
+        x2, y1 = w - 16, 16
+        rounded_rect(self.canvas, x2 - pw, y1, x2, y1 + ph, ph / 2, fill=PILL)
+        self.canvas.create_text(x2 - pw / 2, y1 + ph / 2, text=text, fill=TEXT, font=(FONT, 13, "bold"))
+
+    def draw_dots(self, w, h):
+        """Точки внизу: сколько всего картинок и какая сейчас."""
+        if self.count > 30:
+            return
+        gap, r = 18, 5
+        x0 = w / 2 - (self.count - 1) * gap / 2
+        y = h - 22
+        rounded_rect(self.canvas, x0 - 16, y - 12, x0 + (self.count - 1) * gap + 16, y + 12, 12, fill=PILL)
+        for i in range(self.count):
+            x = x0 + i * gap
+            rr = r + 1 if i == self.index else r - 1
+            self.canvas.create_oval(x - rr, y - rr, x + rr, y + rr, outline="",
+                                    fill=TEXT if i == self.index else DOT)
 
     def show_file(self, path, w, h):
         try:
