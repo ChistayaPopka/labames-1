@@ -119,16 +119,18 @@ class ButtonApp:
                       fill=SHADOW, outline="")
         c.create_oval(cx - r, cy - r + depth, cx + r, cy + r + depth, fill=RED_DARK, outline="", tags="btn")
         top = RED_HOVER if self.hover and not self.pressed else RED
-        c.create_oval(cx - r, cy - r + shift, cx + r, cy + r + shift, fill=top, outline="", tags="btn")
+        c.create_oval(cx - r, cy - r + shift, cx + r, cy + r + shift, fill=top, outline="", tags=("btn", "top"))
         c.create_oval(cx - r * 0.55, cy - r * 0.78 + shift, cx - r * 0.05, cy - r * 0.48 + shift,
                       fill=RED_SHINE, outline="", tags="btn")
         c.create_text(cx, cy + shift, text="ЖМИ!", fill="white",
                       font=(FONT, max(int(r * 0.28), 10), "bold"), tags="btn")
 
     def set_hover(self, value):
+        # только перекрашиваем: полная перерисовка удаляет фигуру под мышью,
+        # Tk шлёт Leave/Enter, и окно зависает в бесконечной перерисовке
         self.hover = value
         self.canvas.config(cursor="hand2" if value else "")
-        self.draw_button()
+        self.canvas.itemconfig("top", fill=RED_HOVER if value and not self.pressed else RED)
 
     def on_key(self, event):
         # пробел в поле ввода — это просто пробел; Enter жмёт кнопку всегда
